@@ -22,7 +22,38 @@
 
 #include <pcl_conversions/pcl_conversions.h>
 
+// #include <autoware_msgs/DetectedObject.h>
+// #include <autoware_msgs/DetectedObjectArray.h>
+
 #include "stereo_camera.h"
+
+#include <time.h>
+#include <chrono>
+
+void timeis() {
+    auto start = std::chrono::high_resolution_clock::now();
+
+    // operation to be timed ...
+
+    auto finish = std::chrono::high_resolution_clock::now();
+    std::cout << std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count() << "ns\n";
+}
+// Get current date/time, format is YYYY-MM-DD.HH:mm:ss
+
+double what_time_is_it_now() {
+    auto current_time = std::chrono::high_resolution_clock::now();
+    auto duration_in_seconds = std::chrono::duration_cast<std::chrono::nanoseconds>(current_time.time_since_epoch());
+    double num_seconds = duration_in_seconds.count() / 1e9;
+    return num_seconds;
+}
+
+const struct tm currentDateTime() {
+    time_t     now = time(0);
+    struct tm  tstruct;
+    tstruct = *localtime(&now);
+    return tstruct;
+}
+
 
 namespace stereo_reconstruct {
 
@@ -92,6 +123,10 @@ namespace stereo_reconstruct {
 
             image_transport::ImageTransport depth_it(nh);
             depth_pub_ = depth_it.advertiseCamera("depth", 1, false);
+
+            std::cout << std::fixed;
+            std::cout.precision(6);
+
         }
 
         void stereo_callback(const sensor_msgs::ImageConstPtr &image_left,
@@ -128,29 +163,68 @@ namespace stereo_reconstruct {
                 stereo_camera_.camera_model_.left.cy  = stereo_camera_model.left().cy();
                 stereo_camera_.camera_model_.left.fx  = stereo_camera_model.left().fx();
                 stereo_camera_.camera_model_.right.cx = stereo_camera_model.right().cx();
+                stereo_camera_.camera_model_.right.cy = stereo_camera_model.right().cy();
                 stereo_camera_.camera_model_.right.fx = stereo_camera_model.right().fx();
-
+                // std::cout << stereo_camera_.camera_model_.baseline << std::endl;
+                // std::cout << stereo_camera_.camera_model_.left.cx << " " << stereo_camera_.camera_model_.left.cy << " " << stereo_camera_.camera_model_.left.fx << std::endl;
+                // std::cout << stereo_camera_.camera_model_.right.cx << " " << stereo_camera_.camera_model_.right.cy << " " << stereo_camera_.camera_model_.right.fx << std::endl;
+                bool GO_HALF = 1;
                 cv::Mat mat_disp;
-                stereo_camera_.compute_disparity_map(mat_left, mat_right, mat_disp);
+                if (GO_HALF) {
+                    cv::Mat mat_left_half, mat_right_half, mat_disp_half;
+                    cv::resize( mat_left, mat_left_half, cv::Size( mat_left.cols/2, mat_left.rows/2 ), 0, 0, CV_INTER_NN );
+                    cv::resize( mat_right, mat_right_half, cv::Size( mat_right.cols/2, mat_right.rows/2 ), 0, 0, CV_INTER_NN );
+                    stereo_camera_.compute_disparity_map(mat_left_half, mat_right_half, mat_disp_half);
+                    mat_disp_half *= 2.0;
+                    cv::resize( mat_disp_half, mat_disp, cv::Size( mat_left.cols, mat_left.rows ), 0, 0, CV_INTER_NN );
+                }
+                else {
+                    stereo_camera_.compute_disparity_map(mat_left, mat_right, mat_disp);
+                }
 
                 if (depth_frame_ == nullptr)
                     depth_frame_ = new cv::Mat(mat_disp.size(), is_mm_ ? CV_16UC1 : CV_32FC1);
                 stereo_camera_.disparity_to_depth_map(mat_disp, *depth_frame_);
 
-                PointCloudTYPE::Ptr pcl_cloud(new PointCloudTYPE);
-                stereo_camera_.depth_to_pointcloud(*depth_frame_, mat_left, *pcl_cloud);
+                // PointCloudTYPE::Ptr pcl_cloud(new PointCloudTYPE);
+                // stereo_camera_.depth_to_pointcloud(*depth_frame_, mat_left, *pcl_cloud);
 
                 if(is_use_colormap_)
                 {
                     cv::Mat colormap;
-                    cg::StereoCamera::get_colormap_ocv(*depth_frame_, colormap);
+                    // cg::StereoCamera::get_colormap_ocv(*depth_frame_, colormap,  cv::COLORMAP_JET);
+                    cg::StereoCamera::get_colormap_ocv(mat_disp, colormap,  cv::COLORMAP_JET);
                     cv::imshow("depth colormap", colormap);
+                    // char buf[256];
+                    // sprintf(buf, "/home/autoware/shared_dir/stereo_results/%04d.jpg", image_left->header.seq);
+                    // std::ifstream infile(buf);
+                    // if(!infile.good()) {
+                    //     std::cout << buf << std::endl;
+                    //     cv::imwrite(buf, colormap);
+                    // }
+                    
+                    
                     cv::waitKey(3);
                 }
-
+                /*
+                DD.x = box.xmin
+           DD.y = box.ymin
+           DD.width = box.xmax - box.xmin
+           DD.height = box.ymax - box.ymin
+           DD.label = box.Class + str(obj_depth)[:3]
+           DD.score = box.probability
+           DD.id = box.id
+           DD.user_defined_info.append(str(obj_depth)[:3])
+           DDs.objects.append(DD)
+                */
+                
+                fps_ = 1./(what_time_is_it_now() - demoTime_);
+                fps100_ = (fps100_ * 99.0 / 100.0) + (fps_ / 100.0);
+                std::cout << "FPS: " << fps_ << " / " << fps100_ << std::endl;
+                demoTime_ = what_time_is_it_now();
                 publish_depth(*depth_frame_, cam_info_left, image_left->header.stamp);
 
-                publish_cloud(pcl_cloud, image_left->header.stamp);
+                //publish_cloud(pcl_cloud, image_left->header.stamp);
             }
         }
 
@@ -158,7 +232,7 @@ namespace stereo_reconstruct {
                 cv::Mat &depth,
                 const sensor_msgs::CameraInfoConstPtr &cam_info,
                 ros::Time time_stamp) {
-
+            
             std::string encoding = "";
             switch (depth.type()) {
                 case CV_16UC1:
@@ -195,6 +269,9 @@ namespace stereo_reconstruct {
     private:
         bool is_mm_;
         bool is_use_colormap_;
+        float fps_;
+        float fps100_;
+        double demoTime_;
 
         cv::Mat *depth_frame_;
 
