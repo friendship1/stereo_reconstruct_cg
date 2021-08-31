@@ -200,10 +200,14 @@ namespace cg {
     void StereoCamera::get_colormap_ocv(const cv::Mat &mat_in, cv::Mat &color_map, cv::ColormapTypes colortype) {
         double min, max;
         cv::minMaxLoc(mat_in, &min, &max);
-
+        // std::cout << min << " " << max << "\n";
+        min = 0;
+        max = 90;
         cv::Mat mat_scaled;
-        if (min != max)
+        if (min != max) {
             mat_in.convertTo(mat_scaled, CV_8UC1, 255.0 / (max - min), 0); // -255.0 * min / (max - min)
+            // mat_in.convertTo(mat_scaled, CV_8UC1, -255.0 / (max - min), 255.0); // -255.0 * min / (max - min)
+        }
 
         cv::applyColorMap(mat_scaled, color_map, int(colortype));
     }
